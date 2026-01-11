@@ -191,7 +191,18 @@
             const [loading, setLoading] = useState(true);
 
             const loadShift = async () => { const { data } = await supabase.from('shifts').select('*').eq('driver_id', user.id).eq('status', 'active').single(); setMyShift(data); setLoading(false); };
-            useEffect(() => { loadShift(); const ch = supabase.channel('ds').on('postgres_changes', { event: '*', schema: 'public', table: 'shifts', filter: `driver_id=eq.${user.id}` }, loadShift).subscribe(); return () => supabase.removeChannel(ch); }, [user.id]);
+            useEffect(() => { 
+                loadShift(); 
+                const ch = supabase.channel('driver-shifts-' + user.id)
+                    .on('postgres_changes', { event: '*', schema: 'public', table: 'shifts' }, (payload) => {
+                        console.log('Shift change:', payload);
+                        loadShift();
+                    })
+                    .subscribe((status) => {
+                        console.log('Subscription status:', status);
+                    }); 
+                return () => supabase.removeChannel(ch); 
+            }, [user.id]);
 
             const gotovina = DENOMINATIONS_RSD.reduce((s, d) => s + (d.value * (apoeni[d.value] || 0)), 0);
 
@@ -236,7 +247,18 @@
             const drivers = users.filter(u => u.role === 'driver');
 
             const loadShifts = async () => { const { data } = await supabase.from('shifts').select('*').eq('status', 'active'); setShifts(data || []); setLoading(false); };
-            useEffect(() => { loadShifts(); const ch = supabase.channel('dsp').on('postgres_changes', { event: '*', schema: 'public', table: 'shifts' }, loadShifts).subscribe(); return () => supabase.removeChannel(ch); }, []);
+            useEffect(() => { 
+                loadShifts(); 
+                const ch = supabase.channel('dispatcher-shifts')
+                    .on('postgres_changes', { event: '*', schema: 'public', table: 'shifts' }, (payload) => {
+                        console.log('Shifts change:', payload);
+                        loadShifts();
+                    })
+                    .subscribe((status) => {
+                        console.log('Dispatcher subscription:', status);
+                    }); 
+                return () => supabase.removeChannel(ch); 
+            }, []);
 
             const saveZaduzenje = async () => { if (!zaduzenje) return; setLoading(true); const shift = shifts.find(s => s.driver_id === selectedDriver.id); await supabase.from('shifts').update({ zaduzenje: parseInt(zaduzenje) }).eq('id', shift.id); setSelectedDriver(null); setZaduzenje(''); notify('Zaduženje upisano!'); loadShifts(); };
 
