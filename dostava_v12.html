@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dostava v12</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * { -webkit-tap-highlight-color: transparent; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #f97316; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+// ============ CONFIG ============
+const SUPABASE_URL = 'https://oasjtgfphmngvnjcmpdb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_jfBWjgDRxxo661HfgKRmxg_LJqrn438';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const T = { users: 'delivery_users', shifts: 'delivery_shifts', submissions: 'delivery_submissions', safe_tx: 'delivery_safe_transactions', tickets: 'delivery_tickets', comments: 'delivery_ticket_comments' };
+
+// ============ CONSTANTS ============
+const LOCATIONS = ['Kancelarija','Palačinkarnica','Požeška 47','Požeška 96','Novi Beograd','Dravska','Pekara','Food Truck'];
+const ROLES = [
+    { id: 'driver', name: 'Vozač', icon: '🚚' },
+    { id: 'dispatcher', name: 'Dispecer', icon: '🎧' },
+    { id: 'office', name: 'Admin. radnik', icon: '💼' },
+    { id: 'admin', name: 'Admin', icon: '⭐' }
+];
+const TICKET_CATS = [
+    { id: 'fuel', name: 'Gorivo', icon: '⛽', color: 'yellow' },
+    { id: 'damage', name: 'Oštećenje vozila', icon: '🚗', color: 'red' },
+    { id: 'repair', name: 'Kvar', icon: '🔧', color: 'orange' },
+    { id: 'equipment', name: 'Oprema', icon: '📦', color: 'blue' },
+    { id: 'other', name: 'Ostalo', icon: '⚠️', color: 'gray' }
+];
+const TICKET_STATUS = [
+    { id: 'open', name: 'Otvoren', color: 'red' },
+    { id: 'assigned', name: 'Dodeljen', color: 'yellow' },
+    { id: 'in_progress', name: 'U toku', color: 'blue' },
+    { id: 'resolved', name: 'Rešen', color: 'green' },
+    { id: 'closed', name: 'Zatvoren', color: 'gray' }
+];
+const PRIORITIES = [
+    { id: 'low', name: 'Nizak', color: 'green' },
+    { id: 'medium', name: 'Srednji', color: 'yellow' },
+    { id: 'high', name: 'Visok', color: 'orange' },
+    { id: 'urgent', name: 'Hitan', color: 'red' }
+];
+const APOEN = [5000,2000,1000,500,200,100,50,20,10];
+const CHECKLISTS = {
+    driver: {
+        start: [
+            { t: 'Proveriti gorivo', report: 'fuel' },
+            { t: 'Proveriti gume', report: 'repair' },
+            { t: 'Pregledati vozilo za oštećenja', report: 'damage' },
+            { t: 'Proveriti telefon i punjač', report: 'equipment' },
+            { t: 'Uzeti kesu za kusur' },
+            { t: 'Prijaviti se u E-bar' }
+        ],
+        during: [
+            { t: 'Proveriti adrese pre polaska' },
+            { t: 'Javiti dispeceru probleme', report: 'other' },
+            { t: 'Čuvati račune' }
+        ],
+        end: [
+            { t: 'Prebrojati gotovinu' },
+            { t: 'Prijaviti oštećenja vozila', report: 'damage' },
+            { t: 'Odjaviti se iz E-bar' }
+        ]
+    },
+    dispatcher: {
+        start: [{ t: 'Proveriti raspored' }, { t: 'Otvoriti sistem' }],
+        during: [{ t: 'Pratiti dostave' }, { t: 'Koordinirati vozače' }],
+        end: [{ t: 'Proveriti sve dostave' }, { t: 'Napraviti izveštaj' }]
+    },
+    office: {
+        start: [{ t: 'Otvoriti kasu' }, { t: 'Prebrojati stanje' }],
+        during: [{ t: 'Primati pazare' }, { t: 'Voditi evidenciju' }],
+        end: [{ t: 'Zatvoriti kasu' }, { t: 'Prebrojati stanje' }]
+    },
+    admin: {
+        start: [{ t: 'Pregled sistema' }],
+        during: [{ t: 'Nadgledanje' }],
+        end: [{ t: 'Izveštaji' }]
+    }
+};
+
+const fmt = n => new Intl.NumberFormat('sr-RS').format(n||0);
+const fmtDT = d => new Date(d).toLocaleString('sr-RS');
+const fmtD = d => new Date(d).toLocaleDateString('sr-RS');
+const fmtT = d => new Date(d).toLocaleTimeString('sr-RS',{hour:'2-digit',minute:'2-digit'});
+
+// ============ COMPONENTS ============
+const Notif = ({msg,type,onClose}) => (
+    <div className={`fixed top-4 left-4 right-4 z-50 p-4 rounded-lg shadow-lg flex items-center gap-3 ${type==='success'?'bg-green-100 text-green-800':'bg-red-100 text-red-800'}`}>
+        <span className="flex-1 font-medium">{msg}</span>
+        <button onClick={onClose}>✕</button>
+    </div>
+);
+
+const Spinner = () => <div className="flex justify-center p-8"><div className="loader"></div></div>;
+
+const Header = ({user,onLogout,title,badges}) => (
+    <div className="bg-white border-b sticky top-0 z-40">
+        <div className="max-w-lg mx-auto px-4 py-3 flex justify-between items-center">
+            <div>
+                <div className="flex items-center gap-2">
+                    <span className="font-bold">{title}</span>
+                    <span className="w-2 h-2 rounded-full bg-green-500"></span>
+                    {badges?.tickets > 0 && <span className="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full">{badges.tickets}</span>}
+                </div>
+                <p className="text-sm text-gray-500">{user?.name}</p>
+            </div>
+            <button onClick={onLogout} className="p-2 text-gray-400">🚪</button>
+        </div>
+    </div>
+);
+
+const Modal = ({title,children,onClose}) => (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl p-6 w-full max-w-sm max-h-[80vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-bold">{title}</h3>
+                <button onClick={onClose}>✕</button>
+            </div>
+            {children}
+        </div>
+    </div>
+);
+
+const StatusBadge = ({status}) => {
+    const s = TICKET_STATUS.find(x=>x.id===status);
+    const c = {red:'bg-red-100 text-red-700',yellow:'bg-yellow-100 text-yellow-700',blue:'bg-blue-100 text-blue-700',green:'bg-green-100 text-green-700',gray:'bg-gray-100 text-gray-700'};
+    return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${c[s?.color]||c.gray}`}>{s?.name||status}</span>;
+};
+
+const PriorityDot = ({p}) => {
+    const pr = PRIORITIES.find(x=>x.id===p);
+    const c = {red:'bg-red-500',yellow:'bg-yellow-500',orange:'bg-orange-500',green:'bg-green-500'};
+    return <span className={`w-3 h-3 rounded-full ${c[pr?.color]||'bg-gray-400'}`} title={pr?.name}></span>;
+};
+
+// ============ LOGIN ============
+const Login = ({onLogin,loading}) => {
+    const [pin,setPin] = useState('');
+    const [err,setErr] = useState('');
+    const [busy,setBusy] = useState(false);
+
+    const submit = async e => {
+        e.preventDefault();
+        setBusy(true); setErr('');
+        const {data,error} = await supabase.from(T.users).select('*').eq('pin',pin).single();
+        if(error||!data) { setErr('Pogrešna šifra'); setPin(''); }
+        else onLogin(data);
+        setBusy(false);
+    };
+
+    if(loading) return <div className="min-h-screen bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center"><div className="bg-white rounded-3xl p-8"><Spinner/></div></div>;
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-xl p-8 w-full max-w-sm">
+                <div className="text-center mb-6">
+                    <div className="text-5xl mb-2">🚚</div>
+                    <h1 className="text-2xl font-bold">Dostava v12</h1>
+                    <p className="text-gray-500">Sa tiketima</p>
+                </div>
+                <form onSubmit={submit}>
+                    <div className="flex justify-center gap-3 mb-4">
+                        {[0,1,2,3].map(i => <div key={i} className={`w-12 h-12 rounded-xl border-2 flex items-center justify-center text-xl font-bold ${pin.length>i?'border-orange-500 bg-orange-50':'border-gray-200'}`}>{pin.length>i?'•':''}</div>)}
+                    </div>
+                    {err && <p className="text-red-500 text-center mb-4">{err}</p>}
+                    <div className="grid grid-cols-3 gap-2 mb-4">
+                        {[1,2,3,4,5,6,7,8,9,null,0,'⌫'].map((n,i) => <button key={i} type="button" onClick={()=>n==='⌫'?setPin(p=>p.slice(0,-1)):n!==null&&pin.length<4&&setPin(p=>p+n)} disabled={n===null} className={`h-12 rounded-xl text-lg font-semibold ${n===null?'invisible':n==='⌫'?'bg-gray-100':'bg-gray-50 active:bg-gray-200'}`}>{n}</button>)}
+                    </div>
+                    <button type="submit" disabled={pin.length!==4||busy} className="w-full py-3 bg-orange-500 text-white rounded-xl font-semibold disabled:bg-gray-300">{busy?'...':'Prijava'}</button>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+// ============ TICKET COMPONENTS ============
+const TicketCreate = ({user,onBack,onCreate,preset}) => {
+    const [cat,setCat] = useState(preset?.cat||'');
+    const [title,setTitle] = useState(preset?.title||'');
+    const [desc,setDesc] = useState('');
+    const [prio,setPrio] = useState('medium');
+    const [saving,setSaving] = useState(false);
+
+    const save = async () => {
+        if(!cat||!title) return;
+        setSaving(true);
+        const num = 'TKT-' + Date.now().toString().slice(-6);
+        const {data,error} = await supabase.from(T.tickets).insert({
+            ticket_number: num, category: cat, title, description: desc, priority: prio,
+            status: 'open', created_by: user.id, created_by_name: user.name
+        }).select().single();
+        
+        if(data && preset?.checkItem) {
+            await supabase.from(T.comments).insert({
+                ticket_id: data.id, user_id: user.id, user_name: user.name,
+                comment: `Prijavljeno iz čekliste: "${preset.checkItem}"`, type: 'system'
+            });
+        }
+        setSaving(false);
+        onCreate(data);
+    };
+
+    return (
+        <div className="p-4 space-y-4">
+            <button onClick={onBack} className="text-gray-500">← Nazad</button>
+            <h2 className="text-xl font-bold">Novi tiket</h2>
+            
+            <div className="bg-white rounded-xl p-4 border-2">
+                <p className="text-sm font-medium text-gray-600 mb-2">Kategorija *</p>
+                <div className="grid grid-cols-2 gap-2">
+                    {TICKET_CATS.map(c => (
+                        <button key={c.id} onClick={()=>setCat(c.id)} className={`p-3 rounded-xl border-2 flex items-center gap-2 text-sm ${cat===c.id?'border-orange-500 bg-orange-50':'border-gray-200'}`}>
+                            <span>{c.icon}</span><span>{c.name}</span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 border-2">
+                <p className="text-sm font-medium text-gray-600 mb-2">Naslov *</p>
+                <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="Kratak opis" className="w-full p-3 border-2 rounded-xl"/>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 border-2">
+                <p className="text-sm font-medium text-gray-600 mb-2">Opis</p>
+                <textarea value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Detalji..." rows={3} className="w-full p-3 border-2 rounded-xl"/>
+            </div>
+
+            <div className="bg-white rounded-xl p-4 border-2">
+                <p className="text-sm font-medium text-gray-600 mb-2">Prioritet</p>
+                <div className="flex gap-2">
+                    {PRIORITIES.map(p => (
+                        <button key={p.id} onClick={()=>setPrio(p.id)} className={`flex-1 p-2 rounded-xl border-2 text-sm ${prio===p.id?'border-orange-500 bg-orange-50':'border-gray-200'}`}>{p.name}</button>
+                    ))}
+                </div>
+            </div>
+
+            <button onClick={save} disabled={!cat||!title||saving} className="w-full py-4 bg-orange-500 text-white rounded-xl font-semibold disabled:bg-gray-300">
+                {saving?'Kreiranje...':'✓ Kreiraj tiket'}
+            </button>
+        </div>
+    );
+};
+
+const TicketDetail = ({ticket,user,users,onBack,onUpdate}) => {
+    const [comments,setComments] = useState([]);
+    const [newComment,setNewComment] = useState('');
+    const [showStatus,setShowStatus] = useState(false);
+    const [showAssign,setShowAssign] = useState(false);
+
+    const cat = TICKET_CATS.find(c=>c.id===ticket.category);
+    const canManage = ['admin','dispatcher','office'].includes(user.role);
+
+    useEffect(() => {
+        loadComments();
+    }, [ticket.id]);
+
+    const loadComments = async () => {
+        const {data} = await supabase.from(T.comments).select('*').eq('ticket_id',ticket.id).order('created_at');
+        setComments(data||[]);
+    };
+
+    const addComment = async () => {
+        if(!newComment.trim()) return;
+        await supabase.from(T.comments).insert({
+            ticket_id: ticket.id, user_id: user.id, user_name: user.name, user_role: user.role,
+            comment: newComment, type: 'comment'
+        });
+        setNewComment('');
+        loadComments();
+    };
+
+    const changeStatus = async (status) => {
+        await supabase.from(T.tickets).update({status, updated_at: new Date().toISOString()}).eq('id',ticket.id);
+        await supabase.from(T.comments).insert({
+            ticket_id: ticket.id, user_id: user.id, user_name: user.name,
+            comment: `Status: ${TICKET_STATUS.find(s=>s.id===status)?.name}`, type: 'status'
+        });
+        setShowStatus(false);
+        onUpdate();
+    };
+
+    const assignTo = async (userId) => {
+        const assignee = users.find(u=>u.id===userId);
+        await supabase.from(T.tickets).update({
+            assigned_to: userId||null, assigned_to_name: assignee?.name||null,
+            status: userId?'assigned':'open', updated_at: new Date().toISOString()
+        }).eq('id',ticket.id);
+        await supabase.from(T.comments).insert({
+            ticket_id: ticket.id, user_id: user.id, user_name: user.name,
+            comment: userId?`Dodeljeno: ${assignee?.name}`:'Uklonjena dodela', type: 'assign'
+        });
+        setShowAssign(false);
+        onUpdate();
+    };
+
+    return (
+        <div className="p-4 space-y-4">
+            <button onClick={onBack} className="text-gray-500">← Nazad</button>
+
+            <div className={`bg-${cat?.color||'gray'}-50 rounded-xl p-4 border-2`}>
+                <div className="flex justify-between items-start">
+                    <div className="flex items-center gap-3">
+                        <span className="text-3xl">{cat?.icon}</span>
+                        <div>
+                            <p className="text-xs text-gray-500">{ticket.ticket_number}</p>
+                            <h2 className="font-bold text-lg">{ticket.title}</h2>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <PriorityDot p={ticket.priority}/>
+                        <StatusBadge status={ticket.status}/>
+                    </div>
+                </div>
+                {ticket.description && <p className="mt-3 text-gray-600">{ticket.description}</p>}
+                <div className="mt-3 text-xs text-gray-500">
+                    <p>Kreirao: {ticket.created_by_name} • {fmtDT(ticket.created_at)}</p>
+                    {ticket.assigned_to_name && <p>Dodeljen: {ticket.assigned_to_name}</p>}
+                </div>
+            </div>
+
+            {canManage && (
+                <div className="flex gap-2">
+                    <button onClick={()=>setShowStatus(true)} className="flex-1 py-3 bg-blue-500 text-white rounded-xl font-semibold text-sm">Status</button>
+                    <button onClick={()=>setShowAssign(true)} className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-semibold text-sm">Dodeli</button>
+                </div>
+            )}
+
+            {showStatus && (
+                <Modal title="Promeni status" onClose={()=>setShowStatus(false)}>
+                    <div className="space-y-2">
+                        {TICKET_STATUS.map(s => (
+                            <button key={s.id} onClick={()=>changeStatus(s.id)} className={`w-full p-3 rounded-xl border-2 text-left ${ticket.status===s.id?'border-green-500 bg-green-50':'border-gray-200'}`}>{s.name}</button>
+                        ))}
+                    </div>
+                </Modal>
+            )}
+
+            {showAssign && (
+                <Modal title="Dodeli tiket" onClose={()=>setShowAssign(false)}>
+                    <div className="space-y-2">
+                        <button onClick={()=>assignTo(null)} className="w-full p-3 rounded-xl border-2 text-left">Bez dodele</button>
+                        {users.map(u => (
+                            <button key={u.id} onClick={()=>assignTo(u.id)} className={`w-full p-3 rounded-xl border-2 text-left ${ticket.assigned_to===u.id?'border-green-500 bg-green-50':'border-gray-200'}`}>
+                                {ROLES.find(r=>r.id===u.role)?.icon} {u.name}
+                            </button>
+                        ))}
+                    </div>
+                </Modal>
+            )}
+
+            <div className="bg-white rounded-xl p-4 border-2">
+                <h3 className="font-bold mb-3">💬 Komentari ({comments.length})</h3>
+                <div className="space-y-2 max-h-48 overflow-y-auto mb-4">
+                    {comments.length===0 ? <p className="text-gray-400 text-center py-4">Nema komentara</p> :
+                        comments.map(c => (
+                            <div key={c.id} className={`p-3 rounded-lg ${c.type==='comment'?'bg-gray-50':'bg-blue-50'}`}>
+                                <div className="flex justify-between text-xs text-gray-500 mb-1">
+                                    <span className="font-semibold">{c.user_name}</span>
+                                    <span>{fmtDT(c.created_at)}</span>
+                                </div>
+                                <p className={`text-sm ${c.type!=='comment'?'italic text-blue-600':''}`}>{c.comment}</p>
+                            </div>
+                        ))
+                    }
+                </div>
+                <div className="flex gap-2">
+                    <input value={newComment} onChange={e=>setNewComment(e.target.value)} placeholder="Dodaj komentar..." className="flex-1 p-3 border-2 rounded-xl" onKeyPress={e=>e.key==='Enter'&&addComment()}/>
+                    <button onClick={addComment} disabled={!newComment.trim()} className="px-4 bg-orange-500 text-white rounded-xl disabled:bg-gray-300">➤</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const TicketList = ({user,users,onBack,onCreate,notify}) => {
+    const [tickets,setTickets] = useState([]);
+    const [filter,setFilter] = useState('all');
+    const [selected,setSelected] = useState(null);
+    const [loading,setLoading] = useState(true);
+
+    const load = async () => {
+        let q = supabase.from(T.tickets).select('*').order('created_at',{ascending:false});
+        if(user.role==='driver') q = q.or(`created_by.eq.${user.id},assigned_to.eq.${user.id}`);
+        const {data} = await q;
+        setTickets(data||[]);
+        setLoading(false);
+    };
+
+    useEffect(() => { load(); }, []);
+
+    const filtered = tickets.filter(t => {
+        if(filter==='all') return true;
+        if(filter==='my') return t.created_by===user.id;
+        if(filter==='assigned') return t.assigned_to===user.id;
+        if(filter==='open') return ['open','assigned','in_progress'].includes(t.status);
+        return t.status===filter;
+    });
+
+    if(loading) return <Spinner/>;
+
+    if(selected) return <TicketDetail ticket={selected} user={user} users={users} onBack={()=>{setSelected(null);load();}} onUpdate={()=>{load();setSelected(tickets.find(t=>t.id===selected.id));}} />;
+
+    return (
+        <div className="p-4 space-y-4">
+            <button onClick={onBack} className="text-gray-500">← Nazad</button>
+            <div className="flex justify-between items-center">
+                <h2 className="text-xl font-bold">Tiketi ({filtered.length})</h2>
+                <button onClick={onCreate} className="px-4 py-2 bg-orange-500 text-white rounded-lg font-semibold">+ Novi</button>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto pb-2">
+                {[{id:'all',name:'Svi'},{id:'my',name:'Moji'},{id:'assigned',name:'Meni'},{id:'open',name:'Otvoreni'},{id:'resolved',name:'Rešeni'}].map(f => (
+                    <button key={f.id} onClick={()=>setFilter(f.id)} className={`px-3 py-1 rounded-full text-sm whitespace-nowrap ${filter===f.id?'bg-orange-500 text-white':'bg-gray-100'}`}>{f.name}</button>
+                ))}
+            </div>
+
+            <div className="space-y-2">
+                {filtered.length===0 ? <p className="text-center py-8 text-gray-400">Nema tiketa</p> :
+                    filtered.map(t => {
+                        const cat = TICKET_CATS.find(c=>c.id===t.category);
+                        return (
+                            <button key={t.id} onClick={()=>setSelected(t)} className="w-full bg-white rounded-xl p-4 border-2 text-left hover:border-orange-300">
+                                <div className="flex justify-between items-start">
+                                    <div className="flex items-center gap-3">
+                                        <span className="text-2xl">{cat?.icon}</span>
+                                        <div>
+                                            <p className="font-semibold">{t.title}</p>
+                                            <p className="text-xs text-gray-500">{t.ticket_number} • {t.created_by_name}</p>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1">
+                                        <div className="flex items-center gap-1"><PriorityDot p={t.priority}/><StatusBadge status={t.status}/></div>
+                                        <p className="text-xs text-gray-400">{fmtD(t.created_at)}</p>
+                                    </div>
+                                </div>
+                                {t.assigned_to_name && <p className="text-xs text-blue-500 mt-2">👤 {t.assigned_to_name}</p>}
+                            </button>
+                        );
+                    })
+                }
+            </div>
+        </div>
+    );
+};
+
+// ============ CHECKLIST ============
+const Checklist = ({user,phase,onDone,onBack,onReport}) => {
+    const items = CHECKLISTS[user.role]?.[phase] || [];
+    const [checked,setChecked] = useState({});
+    const [reported,setReported] = useState({});
+    const phaseNames = {start:'Početak smene',during:'Tokom smene',end:'Kraj smene'};
+
+    const toggle = i => { if(!reported[i]) setChecked(p=>({...p,[i]:!p[i]})); };
+    const report = (i,item) => {
+        setReported(p=>({...p,[i]:true}));
+        setChecked(p=>({...p,[i]:true}));
+        onReport({ cat: item.report, title: `Problem: ${item.t}`, checkItem: item.t });
+    };
+
+    const allDone = items.every((_,i)=>checked[i]);
+    const doneCount = Object.values(checked).filter(Boolean).length;
+
+    return (
+        <div className="p-4 space-y-4">
+            <button onClick={onBack} className="text-gray-500">← Nazad</button>
+            <div className="bg-green-50 rounded-xl p-4 border-2 border-green-200">
+                <h2 className="font-bold text-lg">✓ {phaseNames[phase]}</h2>
+                <p className="text-sm text-gray-500">Čekiraj ili prijavi problem</p>
+            </div>
+
+            <div className="space-y-2">
+                {items.map((item,i) => (
+                    <div key={i} className={`bg-white rounded-xl p-4 border-2 ${checked[i]?(reported[i]?'border-red-300 bg-red-50':'border-green-500 bg-green-50'):'border-gray-200'}`}>
+                        <div className="flex items-center gap-3">
+                            <button onClick={()=>toggle(i)} className={`w-6 h-6 rounded flex items-center justify-center flex-shrink-0 ${checked[i]?(reported[i]?'bg-red-500 text-white':'bg-green-500 text-white'):'border-2 border-gray-300'}`}>
+                                {checked[i] && (reported[i]?'⚠':'✓')}
+                            </button>
+                            <span className={`flex-1 ${checked[i]&&!reported[i]?'line-through text-gray-400':''}`}>{item.t}</span>
+                            {item.report && !checked[i] && (
+                                <button onClick={()=>report(i,item)} className="px-3 py-1 bg-red-100 text-red-600 rounded-lg text-xs font-semibold">Prijavi</button>
+                            )}
+                            {reported[i] && <span className="px-2 py-1 bg-red-500 text-white rounded text-xs">Tiket</span>}
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            <div className="bg-gray-100 rounded-xl p-3">
+                <div className="flex justify-between text-sm"><span>Završeno:</span><span className="font-bold">{doneCount}/{items.length}</span></div>
+                <div className="w-full bg-gray-300 rounded-full h-2 mt-2">
+                    <div className="bg-green-500 h-2 rounded-full" style={{width:`${(doneCount/items.length)*100}%`}}></div>
+                </div>
+            </div>
+
+            <button onClick={onDone} disabled={!allDone} className="w-full py-4 bg-green-500 text-white rounded-xl font-semibold disabled:bg-gray-300">✓ Završi</button>
+        </div>
+    );
+};
+
+// ============ APOENI INPUT ============
+const ApoeniInput = ({val,setVal}) => {
+    const total = APOEN.reduce((s,a)=>s+(a*(val[a]||0)),0);
+    return (
+        <div className="space-y-2">
+            {APOEN.map(a => (
+                <div key={a} className="flex items-center gap-2 bg-white rounded-lg p-2 border">
+                    <span className="w-14 font-semibold text-sm">{fmt(a)}</span>
+                    <span className="text-gray-400">×</span>
+                    <input type="number" min="0" value={val[a]||''} onChange={e=>setVal({...val,[a]:parseInt(e.target.value)||0})} className="flex-1 p-2 text-center border rounded"/>
+                    <span className="w-16 text-right text-sm text-gray-600">{fmt(a*(val[a]||0))}</span>
+                </div>
+            ))}
+            <div className="flex justify-between bg-green-100 rounded-lg p-3">
+                <span className="font-bold text-green-800">UKUPNO:</span>
+                <span className="font-bold text-xl text-green-800">{fmt(total)} RSD</span>
+            </div>
+        </div>
+    );
+};
+
+// ============ DRIVER HOME ============
+const DriverHome = ({user,users,notify}) => {
+    const [view,setView] = useState('home');
+    const [phase,setPhase] = useState(null);
+    const [preset,setPreset] = useState(null);
+    const [shift,setShift] = useState(null);
+    const [loading,setLoading] = useState(true);
+    const [apoeni,setApoeni] = useState({});
+    const [dostave,setDostave] = useState('');
+    const [mesto,setMesto] = useState('');
+    const [endCheckDone,setEndCheckDone] = useState(false);
+
+    const [openTickets,setOpenTickets] = useState(0);
+
+    const loadShift = async () => {
+        const {data} = await supabase.from(T.shifts).select('*').eq('driver_id',user.id).eq('status','active').single();
+        setShift(data);
+        setLoading(false);
+    };
+
+    const loadTicketCount = async () => {
+        const {data} = await supabase.from(T.tickets).select('id').or(`created_by.eq.${user.id},assigned_to.eq.${user.id}`).in('status',['open','assigned','in_progress']);
+        setOpenTickets(data?.length||0);
+    };
+
+    useEffect(() => { loadShift(); loadTicketCount(); }, []);
+
+    const startShift = async () => {
+        setLoading(true);
+        await supabase.from(T.shifts).insert({driver_id:user.id, start_time:fmtT(new Date()), date:fmtD(new Date()), status:'active'});
+        notify('Smena započeta!');
+        loadShift();
+    };
+
+    const submitPazar = async () => {
+        if(!dostave||!mesto) return;
+        const got = APOEN.reduce((s,a)=>s+(a*(apoeni[a]||0)),0);
+        if(got===0) return;
+        setLoading(true);
+        await supabase.from(T.submissions).insert({
+            driver_id:user.id, driver_name:user.name, date:shift.date, zaduzenje:shift.zaduzenje,
+            dostave:parseInt(dostave), mesto, gotovina:got, apoeni, status:'pending',
+            start_time:shift.start_time, end_time:fmtT(new Date())
+        });
+        await supabase.from(T.shifts).delete().eq('id',shift.id);
+        setView('home'); setApoeni({}); setDostave(''); setMesto(''); setEndCheckDone(false);
+        notify('Pazar predat!');
+        loadShift();
+    };
+
+    if(loading) return <Spinner/>;
+
+    // Create ticket
+    if(view==='newTicket') return <TicketCreate user={user} onBack={()=>{setView(preset?'checklist':'home');setPreset(null);}} onCreate={t=>{notify('Tiket '+t.ticket_number+' kreiran!');setView(preset?'checklist':'home');setPreset(null);}} preset={preset}/>;
+
+    // Ticket list
+    if(view==='tickets') return <TicketList user={user} users={users} onBack={()=>setView('home')} onCreate={()=>setView('newTicket')} notify={notify}/>;
+
+    // Checklist
+    if(phase) return <Checklist user={user} phase={phase} onBack={()=>setPhase(null)} onDone={()=>{
+        if(phase==='start') startShift();
+        if(phase==='end') setEndCheckDone(true);
+        setPhase(null);
+        notify('Čeklista završena!');
+    }} onReport={p=>{setPreset(p);setView('newTicket');}}/>;
+
+    // Razduzenje
+    if(view==='razduzenje') {
+        if(!endCheckDone) return (
+            <div className="p-4 space-y-4">
+                <div className="bg-orange-50 rounded-xl p-6 border-2 border-orange-200 text-center">
+                    <div className="text-4xl mb-2">📋</div>
+                    <h2 className="text-xl font-bold">Čeklista za kraj smene</h2>
+                    <p className="text-gray-500 mt-2">Pre predaje pazara</p>
+                    <button onClick={()=>setPhase('end')} className="mt-4 px-6 py-3 bg-orange-500 text-white rounded-xl font-semibold">Započni</button>
+                </div>
+                <button onClick={()=>setView('home')} className="w-full py-3 border-2 rounded-xl">Nazad</button>
+            </div>
+        );
+
+        const got = APOEN.reduce((s,a)=>s+(a*(apoeni[a]||0)),0);
+        const diff = got - (shift?.zaduzenje||0);
+
+        return (
+            <div className="p-4 space-y-4">
+                <div className="bg-orange-50 rounded-xl p-4 border-2 border-orange-200">
+                    <p className="text-sm text-orange-600">E-Bar zaduženje</p>
+                    <p className="text-3xl font-bold text-orange-700">{fmt(shift.zaduzenje)} RSD</p>
+                </div>
+                <div className="bg-white rounded-xl p-4 border-2">
+                    <p className="text-sm font-medium text-gray-600 mb-2">Broj dostava</p>
+                    <input type="number" value={dostave} onChange={e=>setDostave(e.target.value)} placeholder="0" className="w-full p-4 text-2xl font-bold text-center border-2 rounded-xl"/>
+                </div>
+                <div className="bg-white rounded-xl p-4 border-2">
+                    <p className="text-sm font-medium text-gray-600 mb-2">Mesto predaje</p>
+                    <div className="grid grid-cols-2 gap-2">
+                        {LOCATIONS.map(l => <button key={l} onClick={()=>setMesto(l)} className={`p-3 rounded-xl border-2 text-sm ${mesto===l?'border-orange-500 bg-orange-50':'border-gray-200'}`}>{l}</button>)}
+                    </div>
+                </div>
+                <div className="bg-green-50 rounded-xl p-4 border-2 border-green-200">
+                    <ApoeniInput val={apoeni} setVal={setApoeni}/>
+                </div>
+                {got>0 && diff!==0 && (
+                    <div className={`rounded-xl p-4 ${diff>0?'bg-blue-100':'bg-red-100'}`}>
+                        <div className="flex justify-between"><span>Razlika:</span><span className="font-bold">{diff>0?'+':''}{fmt(diff)} RSD</span></div>
+                    </div>
+                )}
+                <div className="flex gap-3">
+                    <button onClick={()=>{setView('home');setEndCheckDone(false);}} className="flex-1 py-4 border-2 rounded-xl font-semibold">Otkaži</button>
+                    <button onClick={submitPazar} disabled={!dostave||!mesto||got===0} className="flex-1 py-4 bg-green-500 text-white rounded-xl font-semibold disabled:bg-gray-300">✓ Predaj</button>
+                </div>
+            </div>
+        );
+    }
+
+    // Main home
+    return (
+        <div className="p-4 space-y-4">
+            <button onClick={()=>setView('tickets')} className="w-full bg-purple-100 rounded-xl p-4 flex items-center justify-between border-2 border-purple-200">
+                <div className="flex items-center gap-3"><span className="text-xl">🎫</span><span className="font-semibold">Moji tiketi</span></div>
+                <div className="flex items-center gap-2">
+                    {openTickets>0 && <span className="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full">{openTickets}</span>}
+                    <span>→</span>
+                </div>
+            </button>
+
+            {!shift ? (
+                <>
+                    <div className="bg-gray-100 rounded-2xl p-6">
+                        <h2 className="text-2xl font-bold text-gray-700">Nema aktivne smene</h2>
+                        <p className="text-gray-500">Započnite smenu za danas</p>
+                    </div>
+                    <button onClick={()=>setPhase('start')} className="w-full bg-green-500 text-white rounded-2xl p-6 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                            <span className="text-3xl">📋</span>
+                            <div className="text-left"><p className="font-bold text-lg">Započni smenu</p><p className="text-sm opacity-80">Prvo čeklista</p></div>
+                        </div>
+                        <span>→</span>
+                    </button>
+                </>
+            ) : (
+                <>
+                    <div className="bg-gradient-to-br from-orange-500 to-red-600 rounded-2xl p-6 text-white">
+                        <div className="flex items-center gap-2 mb-2"><span>🕐</span><span className="opacity-80">Od {shift.start_time}</span></div>
+                        <h2 className="text-2xl font-bold">Smena aktivna</h2>
+                        <p className="opacity-80">{shift.date}</p>
+                    </div>
+                    
+                    <button onClick={()=>setPhase('during')} className="w-full bg-blue-100 rounded-xl p-4 flex items-center justify-between border-2 border-blue-200">
+                        <div className="flex items-center gap-3"><span>📝</span><span className="font-semibold">Čeklista tokom smene</span></div>
+                        <span>→</span>
+                    </button>
+
+                    {!shift.zaduzenje ? (
+                        <div className="bg-yellow-50 rounded-xl p-6 border-2 border-yellow-200">
+                            <div className="flex items-center gap-3 text-yellow-700">
+                                <span className="text-2xl">⏳</span>
+                                <div><p className="font-bold">Čekate zaduženje</p><p className="text-sm">Dispecer će upisati</p></div>
+                            </div>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="bg-green-50 rounded-xl p-4 border-2 border-green-200">
+                                <p className="text-sm text-green-600">E-Bar zaduženje</p>
+                                <p className="text-3xl font-bold text-green-700">{fmt(shift.zaduzenje)} RSD</p>
+                            </div>
+                            <button onClick={()=>setView('razduzenje')} className="w-full bg-orange-500 text-white rounded-2xl p-6 flex items-center justify-between">
+                                <div className="flex items-center gap-4"><span className="text-3xl">💵</span><p className="font-bold text-lg">Razduži se</p></div>
+                                <span>→</span>
+                            </button>
+                        </>
+                    )}
+                </>
+            )}
+        </div>
+    );
+};
+
+// ============ DISPATCHER HOME ============
+const DispatcherHome = ({user,users,notify}) => {
+    const [view,setView] = useState('home');
+    const [phase,setPhase] = useState(null);
+    const [preset,setPreset] = useState(null);
+    const [shifts,setShifts] = useState([]);
+    const [selected,setSelected] = useState(null);
+    const [zad,setZad] = useState('');
+    const [loading,setLoading] = useState(true);
+    const [openTickets,setOpenTickets] = useState(0);
+
+    const loadShifts = async () => {
+        const {data} = await supabase.from(T.shifts).select('*').eq('status','active');
+        setShifts(data||[]);
+        setLoading(false);
+    };
+
+    const loadTickets = async () => {
+        const {data} = await supabase.from(T.tickets).select('id').in('status',['open','assigned']);
+        setOpenTickets(data?.length||0);
+    };
+
+    useEffect(() => { loadShifts(); loadTickets(); }, []);
+
+    const saveZad = async () => {
+        if(!zad) return;
+        const sh = shifts.find(s=>s.driver_id===selected.id);
+        await supabase.from(T.shifts).update({zaduzenje:parseInt(zad)}).eq('id',sh.id);
+        setSelected(null); setZad('');
+        notify('Zaduženje upisano!');
+        loadShifts();
+    };
+
+    if(loading) return <Spinner/>;
+
+    if(view==='newTicket') return <TicketCreate user={user} onBack={()=>{setView('home');setPreset(null);}} onCreate={t=>{notify('Tiket kreiran!');setView('home');}} preset={preset}/>;
+    if(view==='tickets') return <TicketList user={user} users={users} onBack={()=>setView('home')} onCreate={()=>setView('newTicket')} notify={notify}/>;
+    if(phase) return <Checklist user={user} phase={phase} onBack={()=>setPhase(null)} onDone={()=>{setPhase(null);notify('Čeklista završena!');}} onReport={p=>{setPreset(p);setView('newTicket');}}/>;
+
+    if(selected) {
+        const sh = shifts.find(s=>s.driver_id===selected.id);
+        return (
+            <div className="p-4 space-y-4">
+                <div className="bg-orange-50 rounded-xl p-4 border-2 border-orange-200">
+                    <p className="font-bold text-orange-800">{selected.name}</p>
+                    <p className="text-sm text-orange-600">Od {sh?.start_time}</p>
+                </div>
+                <div className="bg-white rounded-xl p-4 border-2">
+                    <p className="text-sm font-medium text-gray-600 mb-2">E-Bar zaduženje (RSD)</p>
+                    <input type="number" value={zad} onChange={e=>setZad(e.target.value)} placeholder="0" className="w-full p-4 text-2xl font-bold text-center border-2 rounded-xl"/>
+                </div>
+                <div className="flex gap-3">
+                    <button onClick={()=>{setSelected(null);setZad('');}} className="flex-1 py-4 border-2 rounded-xl font-semibold">Otkaži</button>
+                    <button onClick={saveZad} disabled={!zad} className="flex-1 py-4 bg-orange-500 text-white rounded-xl font-semibold disabled:bg-gray-300">Sačuvaj</button>
+                </div>
+            </div>
+        );
+    }
+
+    const drivers = users.filter(u=>u.role==='driver');
+
+    return (
+        <div className="p-4 space-y-4">
+            <div className="bg-gradient-to-br from-purple-500 to-indigo-600 rounded-2xl p-6 text-white">
+                <p className="opacity-80">Vozači na smeni</p>
+                <p className="text-3xl font-bold">{shifts.length}</p>
+            </div>
+
+            <button onClick={()=>setView('tickets')} className="w-full bg-red-100 rounded-xl p-4 flex items-center justify-between border-2 border-red-200">
+                <div className="flex items-center gap-3"><span className="text-xl">🎫</span><span className="font-semibold">Tiketi</span></div>
+                <div className="flex items-center gap-2">
+                    {openTickets>0 && <span className="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full">{openTickets}</span>}
+                    <span>→</span>
+                </div>
+            </button>
+
+            <div className="grid grid-cols-3 gap-2">
+                {['start','during','end'].map(p => (
+                    <button key={p} onClick={()=>setPhase(p)} className="p-3 rounded-xl border-2 bg-gray-50 text-center">
+                        <span className="text-lg">{p==='start'?'🟢':p==='during'?'🔵':'🟠'}</span>
+                        <p className="text-xs mt-1">{p==='start'?'Početak':p==='during'?'Tokom':'Kraj'}</p>
+                    </button>
+                ))}
+            </div>
+
+            {shifts.length===0 ? <p className="text-center py-6 text-gray-400">Nema vozača na smeni</p> :
+                shifts.map(sh => {
+                    const dr = drivers.find(d=>d.id===sh.driver_id);
+                    return (
+                        <div key={sh.id} className="bg-white rounded-xl p-4 border-2 flex justify-between items-center">
+                            <div><p className="font-semibold">{dr?.name||'?'}</p><p className="text-sm text-gray-500">Od {sh.start_time}</p></div>
+                            {sh.zaduzenje ? (
+                                <div className="text-right">
+                                    <p className="font-bold text-green-600">{fmt(sh.zaduzenje)} RSD</p>
+                                    <button onClick={()=>{setSelected(dr);setZad(sh.zaduzenje.toString());}} className="text-xs text-blue-500">Izmeni</button>
+                                </div>
+                            ) : (
+                                <button onClick={()=>setSelected(dr)} className="px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-semibold">Upiši</button>
+                            )}
+                        </div>
+                    );
+                })
+            }
+        </div>
+    );
+};
+
+// ============ ADMIN HOME ============
+const AdminHome = ({user,users,setUsers,notify}) => {
+    const [view,setView] = useState('home');
+    const [phase,setPhase] = useState(null);
+    const [preset,setPreset] = useState(null);
+    const [subs,setSubs] = useState([]);
+    const [txs,setTxs] = useState([]);
+    const [loading,setLoading] = useState(true);
+    const [verifying,setVerifying] = useState(null);
+    const [apoeni,setApoeni] = useState({});
+    const [txAmt,setTxAmt] = useState('');
+    const [txDesc,setTxDesc] = useState('');
+    const [txCur,setTxCur] = useState('RSD');
+    const [editUser,setEditUser] = useState(null);
+    const [form,setForm] = useState({name:'',pin:'',phone:'',role:'driver'});
+    const [delUser,setDelUser] = useState(null);
+    const [openTickets,setOpenTickets] = useState(0);
+
+    const isAdmin = user.role==='admin';
+
+    const load = async () => {
+        const [s,t] = await Promise.all([
+            supabase.from(T.submissions).select('*').order('created_at',{ascending:false}),
+            supabase.from(T.safe_tx).select('*').order('created_at',{ascending:false})
+        ]);
+        setSubs(s.data||[]);
+        setTxs(t.data||[]);
+        setLoading(false);
+    };
+
+    const loadTickets = async () => {
+        const {data} = await supabase.from(T.tickets).select('id').in('status',['open','assigned']);
+        setOpenTickets(data?.length||0);
+    };
+
+    const loadUsers = async () => {
+        const {data} = await supabase.from(T.users).select('*').order('name');
+        if(data) setUsers(data);
+    };
+
+    useEffect(() => { load(); loadTickets(); }, []);
+
+    const pending = subs.filter(s=>s.status==='pending');
+    const balance = cur => txs.filter(t=>t.currency===cur).reduce((s,t)=>s+(t.type==='in'?Number(t.amount):-Number(t.amount)),0);
+
+    const verify = async id => {
+        const got = APOEN.reduce((s,a)=>s+(a*(apoeni[a]||0)),0);
+        const sub = subs.find(s=>s.id===id);
+        await supabase.from(T.submissions).update({status:'verified',admin_gotovina:got,admin_apoeni:apoeni,verified_by:user.name,verified_at:new Date().toISOString()}).eq('id',id);
+        await supabase.from(T.safe_tx).insert({type:'in',amount:got,currency:'RSD',source:'DRIVER',description:`Keš: ${sub.driver_name}`,created_by:user.name});
+        setVerifying(null); setApoeni({});
+        notify('Potvrđeno!');
+        load();
+    };
+
+    const addTx = async type => {
+        if(!txAmt) return;
+        await supabase.from(T.safe_tx).insert({type:type==='in'?'in':'out',amount:parseFloat(txAmt),currency:txCur,source:type==='in'?'DEPOSIT':'WITHDRAWAL',description:txDesc||(type==='in'?'Unos':'Izuzimanje'),created_by:user.name});
+        setTxAmt(''); setTxDesc(''); setView('home');
+        notify(type==='in'?'Dodato!':'Uzeto!');
+        load();
+    };
+
+    const saveUser = async () => {
+        if(!form.name||form.pin.length!==4) { notify('Unesite ime i PIN','error'); return; }
+        if(users.find(u=>u.pin===form.pin&&u.id!==editUser?.id)) { notify('PIN postoji!','error'); return; }
+        if(editUser) await supabase.from(T.users).update({name:form.name,pin:form.pin,phone:form.phone||null,role:form.role}).eq('id',editUser.id);
+        else await supabase.from(T.users).insert({name:form.name,pin:form.pin,phone:form.phone||null,role:form.role});
+        setEditUser(null); setForm({name:'',pin:'',phone:'',role:'driver'}); setView('users');
+        notify(editUser?'Izmenjeno!':'Dodato!');
+        loadUsers();
+    };
+
+    const deleteUser = async () => {
+        await supabase.from(T.users).delete().eq('id',delUser.id);
+        setDelUser(null); notify('Obrisano!'); loadUsers();
+    };
+
+    if(loading) return <Spinner/>;
+
+    if(delUser) return (
+        <Modal title="Obriši?" onClose={()=>setDelUser(null)}>
+            <p className="mb-4">Obrisati "{delUser.name}"?</p>
+            <div className="flex gap-3">
+                <button onClick={()=>setDelUser(null)} className="flex-1 py-3 border-2 rounded-xl">Otkaži</button>
+                <button onClick={deleteUser} className="flex-1 py-3 bg-red-500 text-white rounded-xl">Obriši</button>
+            </div>
+        </Modal>
+    );
+
+    if(view==='newTicket') return <TicketCreate user={user} onBack={()=>{setView('home');setPreset(null);}} onCreate={t=>{notify('Tiket kreiran!');setView('home');}} preset={preset}/>;
+    if(view==='tickets') return <TicketList user={user} users={users} onBack={()=>setView('home')} onCreate={()=>setView('newTicket')} notify={notify}/>;
+    if(phase) return <Checklist user={user} phase={phase} onBack={()=>setPhase(null)} onDone={()=>{setPhase(null);notify('Čeklista završena!');}} onReport={p=>{setPreset(p);setView('newTicket');}}/>;
+
+    if(view==='reports') {
+        const today = txs.filter(t=>fmtD(t.created_at)===fmtD(new Date()));
+        return (
+            <div className="p-4 space-y-4">
+                <button onClick={()=>setView('home')} className="text-gray-500">← Nazad</button>
+                <h2 className="text-xl font-bold">Izveštaji</h2>
+                <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl p-5 text-white">
+                    <p className="text-sm opacity-80">STANJE SEFA</p>
+                    <p className="text-3xl font-bold mt-2">{fmt(balance('RSD'))} RSD</p>
+                    {balance('EUR')!==0 && <p className="text-lg opacity-80">{fmt(balance('EUR'))} EUR</p>}
+                </div>
+                <div className="bg-blue-50 rounded-xl p-4 border-2 border-blue-200">
+                    <h3 className="font-bold text-blue-800 mb-2">Danas</h3>
+                    <div className="grid grid-cols-2 gap-2 text-sm">
+                        <div className="bg-white rounded p-2"><p className="text-gray-500">Ulaz</p><p className="font-bold text-green-600">+{fmt(today.filter(t=>t.type==='in'&&t.currency==='RSD').reduce((s,t)=>s+Number(t.amount),0))} RSD</p></div>
+                        <div className="bg-white rounded p-2"><p className="text-gray-500">Izlaz</p><p className="font-bold text-red-600">-{fmt(today.filter(t=>t.type==='out'&&t.currency==='RSD').reduce((s,t)=>s+Number(t.amount),0))} RSD</p></div>
+                    </div>
+                </div>
+                <h3 className="font-bold">Transakcije</h3>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {txs.slice(0,20).map(t => (
+                        <div key={t.id} className={`bg-white rounded-xl p-3 border-2 ${t.type==='in'?'border-green-200':'border-red-200'}`}>
+                            <div className="flex justify-between">
+                                <div><p className="font-semibold text-sm">{t.description}</p><p className="text-xs text-gray-500">{fmtDT(t.created_at)} • {t.created_by}</p></div>
+                                <p className={`font-bold ${t.type==='in'?'text-green-600':'text-red-600'}`}>{t.type==='in'?'+':'-'}{fmt(t.amount)} {t.currency}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    }
+
+    if(view==='addMoney'||view==='takeMoney') {
+        const isAdd = view==='addMoney';
+        return (
+            <div className="p-4 space-y-4">
+                <button onClick={()=>setView('home')} className="text-gray-500">← Nazad</button>
+                <h2 className="text-xl font-bold">{isAdd?'Dodaj u sef':'Uzmi iz sefa'}</h2>
+                <div className="flex gap-2">
+                    <button onClick={()=>setTxCur('RSD')} className={`flex-1 p-3 rounded-xl border-2 ${txCur==='RSD'?'border-green-500 bg-green-50':''}`}>RSD</button>
+                    <button onClick={()=>setTxCur('EUR')} className={`flex-1 p-3 rounded-xl border-2 ${txCur==='EUR'?'border-blue-500 bg-blue-50':''}`}>EUR</button>
+                </div>
+                <input type="number" value={txAmt} onChange={e=>setTxAmt(e.target.value)} placeholder="Iznos" className="w-full p-4 text-2xl font-bold text-center border-2 rounded-xl"/>
+                <input type="text" value={txDesc} onChange={e=>setTxDesc(e.target.value)} placeholder="Opis" className="w-full p-3 border-2 rounded-xl"/>
+                <button onClick={()=>addTx(isAdd?'in':'out')} disabled={!txAmt} className={`w-full py-4 text-white rounded-xl font-semibold disabled:bg-gray-300 ${isAdd?'bg-green-500':'bg-red-500'}`}>{isAdd?'✓ Dodaj':'Uzmi'}</button>
+            </div>
+        );
+    }
+
+    if(view==='addUser'||view==='editUserForm') {
+        return (
+            <div className="p-4 space-y-4">
+                <button onClick={()=>{setView('users');setEditUser(null);setForm({name:'',pin:'',phone:'',role:'driver'});}} className="text-gray-500">← Nazad</button>
+                <h2 className="text-xl font-bold">{editUser?'Izmeni':'Novi'} korisnik</h2>
+                <input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Ime i prezime" className="w-full p-3 border-2 rounded-xl"/>
+                <input value={form.pin} onChange={e=>setForm({...form,pin:e.target.value.replace(/\D/g,'').slice(0,4)})} placeholder="PIN (4 cifre)" className="w-full p-3 border-2 rounded-xl text-center text-2xl tracking-widest" maxLength={4}/>
+                <input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Telefon (opciono)" className="w-full p-3 border-2 rounded-xl"/>
+                <div className="space-y-2">
+                    {ROLES.map(r => (
+                        <button key={r.id} onClick={()=>setForm({...form,role:r.id})} className={`w-full p-3 rounded-xl border-2 flex items-center gap-3 ${form.role===r.id?'border-green-500 bg-green-50':'border-gray-200'}`}>
+                            <span className="text-xl">{r.icon}</span><span>{r.name}</span>
+                        </button>
+                    ))}
+                </div>
+                <button onClick={saveUser} disabled={!form.name||form.pin.length!==4} className="w-full py-4 bg-green-500 text-white rounded-xl font-semibold disabled:bg-gray-300">✓ Sačuvaj</button>
+            </div>
+        );
+    }
+
+    if(view==='users') {
+        return (
+            <div className="p-4 space-y-4">
+                <button onClick={()=>setView('home')} className="text-gray-500">← Nazad</button>
+                <div className="flex justify-between items-center">
+                    <h2 className="text-xl font-bold">Korisnici ({users.length})</h2>
+                    {isAdmin && <button onClick={()=>{setForm({name:'',pin:'',phone:'',role:'driver'});setEditUser(null);setView('addUser');}} className="px-4 py-2 bg-green-500 text-white rounded-lg">+ Novi</button>}
+                </div>
+                {ROLES.map(r => {
+                    const ru = users.filter(u=>u.role===r.id);
+                    if(!ru.length) return null;
+                    return (
+                        <div key={r.id}>
+                            <p className="font-bold text-gray-500 text-sm uppercase mb-2">{r.icon} {r.name} ({ru.length})</p>
+                            {ru.map(u => (
+                                <div key={u.id} className="bg-white rounded-xl p-4 border-2 mb-2 flex justify-between items-center">
+                                    <div><p className="font-semibold">{u.name}</p><p className="text-sm text-gray-500">{u.phone||'-'}</p></div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="px-2 py-1 bg-gray-100 rounded font-mono text-sm">{u.pin}</span>
+                                        {isAdmin && (
+                                            <>
+                                                <button onClick={()=>{setEditUser(u);setForm({name:u.name,pin:u.pin,phone:u.phone||'',role:u.role});setView('editUserForm');}} className="p-2 text-blue-500">✏️</button>
+                                                <button onClick={()=>setDelUser(u)} disabled={u.id===user.id} className="p-2 text-red-500 disabled:opacity-30">🗑️</button>
+                                            </>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    }
+
+    if(verifying) {
+        const got = APOEN.reduce((s,a)=>s+(a*(apoeni[a]||0)),0);
+        const diff = got - verifying.gotovina;
+        return (
+            <div className="p-4 space-y-4">
+                <div className="bg-orange-50 rounded-xl p-4 border-2 border-orange-200">
+                    <p className="font-bold">{verifying.driver_name}</p>
+                    <p className="text-sm text-gray-500">{verifying.date}</p>
+                    <p className="text-lg font-bold text-green-600 mt-2">Prijavio: {fmt(verifying.gotovina)} RSD</p>
+                </div>
+                <div className="bg-green-50 rounded-xl p-4 border-2 border-green-200">
+                    <ApoeniInput val={apoeni} setVal={setApoeni}/>
+                </div>
+                {got>0&&diff!==0 && <div className={`rounded-xl p-3 ${diff>0?'bg-blue-100':'bg-red-100'}`}><p className="font-bold">Razlika: {diff>0?'+':''}{fmt(diff)} RSD</p></div>}
+                <div className="flex gap-3">
+                    <button onClick={()=>setVerifying(null)} className="flex-1 py-4 border-2 rounded-xl">Otkaži</button>
+                    <button onClick={()=>verify(verifying.id)} className="flex-1 py-4 bg-green-500 text-white rounded-xl font-semibold">✓ Potvrdi</button>
+                </div>
+            </div>
+        );
+    }
+
+    // Main home
+    return (
+        <div className="p-4 space-y-4">
+            <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-2xl p-5 text-white">
+                <p className="text-sm opacity-80">INTERNI SEF</p>
+                <p className="text-3xl font-bold mt-2">{fmt(balance('RSD'))} RSD</p>
+                {balance('EUR')!==0 && <p className="text-lg opacity-80">{fmt(balance('EUR'))} EUR</p>}
+            </div>
+
+            <button onClick={()=>setView('tickets')} className="w-full bg-red-100 rounded-xl p-4 flex items-center justify-between border-2 border-red-200">
+                <div className="flex items-center gap-3"><span className="text-xl">🎫</span><span className="font-semibold">Tiketi</span></div>
+                <div className="flex items-center gap-2">
+                    {openTickets>0 && <span className="px-2 py-0.5 bg-red-500 text-white text-xs rounded-full">{openTickets}</span>}
+                    <span>→</span>
+                </div>
+            </button>
+
+            <div className="grid grid-cols-3 gap-2">
+                {['start','during','end'].map(p => (
+                    <button key={p} onClick={()=>setPhase(p)} className="p-3 rounded-xl border-2 bg-gray-50 text-center">
+                        <span className="text-lg">{p==='start'?'🟢':p==='during'?'🔵':'🟠'}</span>
+                        <p className="text-xs mt-1">{p==='start'?'Početak':p==='during'?'Tokom':'Kraj'}</p>
+                    </button>
+                ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+                <button onClick={()=>setView('addMoney')} className="bg-green-500 text-white rounded-2xl p-4 text-center"><span className="text-2xl">➕</span><p className="text-sm font-semibold mt-1">Dodaj</p></button>
+                <button onClick={()=>setView('takeMoney')} className="bg-red-500 text-white rounded-2xl p-4 text-center"><span className="text-2xl">➖</span><p className="text-sm font-semibold mt-1">Uzmi</p></button>
+            </div>
+
+            <button onClick={()=>setView('reports')} className="w-full bg-blue-500 text-white rounded-xl p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3"><span>📊</span><span className="font-semibold">Izveštaji</span></div>
+                <span>→</span>
+            </button>
+
+            <button onClick={()=>setView('users')} className="w-full bg-gray-100 rounded-xl p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3"><span>👥</span><span className="font-semibold">Korisnici ({users.length})</span></div>
+                <span>→</span>
+            </button>
+
+            <div className="bg-orange-100 rounded-xl p-3 border-2 border-orange-300">
+                <p className="text-2xl font-bold text-orange-600">{pending.length}</p>
+                <p className="text-xs">Za proveru</p>
+            </div>
+
+            {pending.map(s => (
+                <div key={s.id} className="bg-white rounded-xl p-4 border-2 border-orange-200">
+                    <div className="flex justify-between mb-3">
+                        <div><p className="font-semibold">{s.driver_name}</p><p className="text-sm text-gray-500">{s.date}</p></div>
+                        <p className="font-bold text-green-700">{fmt(s.gotovina)} RSD</p>
+                    </div>
+                    <button onClick={()=>{setVerifying(s);setApoeni(s.apoeni||{});}} className="w-full py-3 bg-orange-500 text-white rounded-lg font-semibold">Proveri</button>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// ============ MAIN APP ============
+function App() {
+    const [user,setUser] = useState(null);
+    const [users,setUsers] = useState([]);
+    const [loading,setLoading] = useState(true);
+    const [notif,setNotif] = useState(null);
+
+    useEffect(() => {
+        supabase.from(T.users).select('*').then(({data,error}) => {
+            if(!error) setUsers(data||[]);
+            setLoading(false);
+        });
+    }, []);
+
+    const notify = (msg,type='success') => { setNotif({msg,type}); setTimeout(()=>setNotif(null),3000); };
+
+    if(!user) return <Login onLogin={setUser} loading={loading}/>;
+
+    const role = ROLES.find(r=>r.id===user.role);
+
+    return (
+        <div className="min-h-screen bg-gray-100">
+            {notif && <Notif msg={notif.msg} type={notif.type} onClose={()=>setNotif(null)}/>}
+            <Header user={user} onLogout={()=>setUser(null)} title={role?.name||'?'} badges={{}}/>
+            <div className="max-w-lg mx-auto pb-8">
+                {user.role==='driver' && <DriverHome user={user} users={users} notify={notify}/>}
+                {user.role==='dispatcher' && <DispatcherHome user={user} users={users} notify={notify}/>}
+                {(user.role==='office'||user.role==='admin') && <AdminHome user={user} users={users} setUsers={setUsers} notify={notify}/>}
+            </div>
+        </div>
+    );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
